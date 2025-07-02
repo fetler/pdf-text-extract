@@ -21,75 +21,67 @@ def extract_data():
     try:
         document = fitz.open(pdf_path)
         total_pages = document.page_count
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Extracted Data"
-        ws.append(["ID Number", "Page Number", "Course Name", "Accepted Outcome"])
+        entries = []
 
         for page_num in range(total_pages):
             try:
                 page = document.load_page(page_num)
                 text = page.get_text("text")
 
-                # Students who have not completed the academic year have their full academic year transcript show in the PDF. It uses different wording to those who have completed
-                # the academic year, so different regex is required to match and extract the text.
-                if "Classification" not in text:
-                    id_matches = re.findall(r'\((\d{8})\)', text)
-                    outcome_matches = re.findall(r'Accepted Outcome:\s*(.+)', text)
-                    course_matches = re.findall(r'Course\s(.+?)(\(.+)', text)
+                # Split and clean lines
+                lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+                
+                # Skip completely blank pages
+                if not lines:
+                    continue
 
-                    if id_matches and outcome_matches and course_matches:
-                        for i in range(min(len(id_matches), len(outcome_matches), len(course_matches))):
-                            id_number = id_matches[i]
-                            accepted_outcome = outcome_matches[i]
-                            course_name = course_matches[i][0]
-                            course_name = course_name.replace("Master of Science in", "MSc").replace(" MSc", "MSc").replace(" PG Cert", "PG Cert").replace(" PG Dip", "PG Dip").replace(" Postgraduate", "Postgraduate").replace(" DClin", "DClin")
+                # Compile regex patterns
+                accepted_outcome_pattern = re.compile(r"^Accepted Outcome:")
+                eight_digit_pattern = re.compile(r"\b\d{8}\b")
+                student_pattern = re.compile(r"^.+,\s.+\s\(\d{8}\)$")
 
-                            ws.append([id_number, page_num + 1, course_name, accepted_outcome])
+                # Check if "Accepted Outcome:" is on the page
+                has_accepted_outcome = any(accepted_outcome_pattern.match(line) for line in lines)
 
-                # Students who have completed the academic year appear in a table with students from their cohort who have also completed the academic year. As it uses different wording
-                # to those who have not completed the academic year, different regex is required to match and extract the text. It also loops through multiple matches per page where applicable.
+                if has_accepted_outcome:
+                    # Print lines that match 8-digit IDs or "Accepted Outcome:"
+                    for idx, line in enumerate(lines):
+                        if eight_digit_pattern.search(line):
+                            student_line = f"{line}"
+
+                            # Search forward for "Accepted Outcome:" line
+                            for j in range(idx + 1, len(lines)):
+                                if accepted_outcome_pattern.match(lines[j]):
+                                    outcome_line = f"{lines[j]}"
+                                    print(f"{page_num + 1}${student_line}${outcome_line}")
+                                    break  # Stop searching once matched
                 else:
-                    programme_matches = re.findall(r'Programme:\s*(.+)', text)
-                    student_matches = re.findall(r'([A-Za-z]+,\s[A-Za-z]+(?:\s[A-Za-z]+)*)\s*\((\d{8})\)', text)
-                    board_decision_matches = re.findall(r'\)\s*([A-Z]+\s*-\s*[A-Za-z ]+)', text)
-                    classification_matches = re.findall(r'([A-Za-z]+)$', text.strip())
-                    print(f"{page_num + 1} - {student_matches}")
+                    # Run the alternative block if "Accepted Outcome:" is not present
+                    results = []
 
-                    if student_matches:
-                        for i, student_match in enumerate(student_matches):
-                            student_name = student_match[0].strip()
-                            student_id = student_match[1].strip()
+                    for i in range(len(lines) - 2):  # Ensure at least 3 lines for student, outcome, classification
+                        if student_pattern.match(lines[i]):
+                            name_id = lines[i]
+                            outcome = lines[i + 1].strip()
+                            classification = lines[i + 2].strip()
 
-                            programme_name = programme_matches[i].strip() if i < len(programme_matches) else "Programme Name Not Found"
-                            board_decision = board_decision_matches[i].strip() if i < len(board_decision_matches) else "Board Decision Not Found"
-                            classification = classification_matches[i].strip() if i < len(classification_matches) else "Classification Not Found"
-                            accepted_outcome_board = f"{board_decision} - {classification}".strip()
-                        
-                            programme_name = programme_name.replace("Master of Science in", "MSc").replace(" MSc", "MSc").replace(" PG Cert", "PG Cert").replace(" PG Dip", "PG Dip").replace(" Postgraduate", "Postgraduate").replace(" DClin", "DClin")
-                            ws.append([student_id, page_num + 1, programme_name, accepted_outcome_board])
-            
+                            # Only include classification if outcome is one of the specified values
+                            if outcome in ["Pass Award", "Pass Award with Compensation"]:
+                                results.append((name_id, outcome, classification))
+                            else:
+                                results.append((name_id, outcome, classification))  # Skip classification
+
+                    for name_id, outcome, classification in results:
+                        if classification:
+                            print(f"{page_num + 1}${name_id}${outcome}${classification}")
+                        else:
+                            print(f"{page_num + 1}${name_id}${outcome}")
+
             except Exception as e:
                 print(f"Error processing page {page_num + 1}: {e}")
-                continue
 
-        global extracted_data
-        extracted_data = wb
-        messagebox.showinfo("Success", "Data extracted successfully!")
-        document.close()
     except Exception as e:
-        messagebox.showerror("Error", f"Failed to process PDF: {e}")
-
-# GUI window to save the XLSX file containing the data found by the regex
-def save_xlsx():
-    if extracted_data is None:
-        messagebox.showerror("Error", "No extracted data to save. Run extraction first.")
-        return
-    
-    file_path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel Files", "*.xlsx")])
-    if file_path:
-        extracted_data.save(file_path)
-        messagebox.showinfo("Success", f"File saved: {file_path}")
+        print(f"Failed to process PDF: {e}")
 
 # GUI Setup
 root = tk.Tk()
